@@ -1,0 +1,125 @@
+vim.opt.runtimepath:prepend(vim.fn.getcwd())
+
+local function assert_same(actual, expected, label)
+  if not vim.deep_equal(actual, expected) then
+    error(string.format("%s:\nexpected %s\ngot %s", label, vim.inspect(expected), vim.inspect(actual)))
+  end
+end
+
+local function assert_truthy(value, label)
+  if not value then
+    error(label)
+  end
+end
+
+local function scratch_markdown(lines)
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].filetype = "markdown"
+  vim.api.nvim_buf_set_name(bufnr, vim.fn.tempname() .. ".md")
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.api.nvim_set_current_buf(bufnr)
+  return bufnr
+end
+
+vim.notify = function() end
+
+local parser = require("markdown_focus.parser")
+local focus = require("markdown_focus.focus")
+local drafts = require("markdown_focus.drafts")
+local edit = require("markdown_focus.edit")
+local fold = require("markdown_focus.fold")
+
+local source = scratch_markdown({
+  "# Week",
+  "",
+  "## Today",
+  "- old",
+  "  - child",
+  "## Tomorrow",
+  "- next",
+})
+
+assert_same(parser.current_block(source, 2), {
+  kind = "heading",
+  start_row = 2,
+  end_row = 4,
+  level = 2,
+  text = "## Today",
+}, "heading block")
+
+assert_same(parser.current_block(source, 4), {
+  kind = "list_item",
+  start_row = 4,
+  end_row = 4,
+  indent = 2,
+  text = "  - child",
+}, "nested list item block")
+
+vim.api.nvim_win_set_cursor(0, { 3, 0 })
+local focus_buf = focus.focus_current_block(source)
+assert_truthy(focus_buf, "expected focus buffer")
+assert_same(vim.api.nvim_buf_get_lines(focus_buf, 0, -1, false), {
+  "## Today",
+  "- old",
+  "  - child",
+}, "focused lines")
+
+vim.api.nvim_buf_set_lines(focus_buf, 1, 2, false, { "- new" })
+local draft_root = vim.fn.tempname()
+local result = focus.unfocus(0, { draft_root = draft_root })
+assert_truthy(result.ok, "expected unfocus writeback")
+assert_same(vim.api.nvim_get_current_buf(), source, "unfocus should switch back to source")
+assert_truthy(not vim.api.nvim_buf_is_valid(focus_buf), "focus buffer should close after writeback")
+assert_same(vim.api.nvim_buf_get_lines(source, 0, -1, false), {
+  "# Week",
+  "",
+  "## Today",
+  "- new",
+  "  - child",
+  "## Tomorrow",
+  "- next",
+}, "source after writeback")
+assert_truthy(#vim.fn.glob(draft_root .. "/*.md", false, true) > 0, "expected recovery draft")
+
+vim.api.nvim_win_set_cursor(0, { 4, 0 })
+local drift_buf = focus.focus_current_block(0)
+assert_truthy(drift_buf, "expected drift focus buffer")
+vim.api.nvim_buf_set_lines(source, 3, 4, false, { "- changed elsewhere" })
+vim.api.nvim_buf_set_lines(drift_buf, 0, -1, false, { "- focused edit" })
+local drift_root = vim.fn.tempname()
+local win_count = #vim.api.nvim_list_wins()
+local drift_result = focus.unfocus(drift_buf, { draft_root = drift_root })
+assert_same(drift_result.reason, "source_changed", "drift reason")
+assert_truthy(vim.api.nvim_buf_is_valid(drift_buf), "focus buffer should stay open after drift")
+assert_same(#vim.api.nvim_list_wins(), win_count, "drift should not open a split")
+assert_same(vim.api.nvim_get_current_buf(), drift_buf, "drift should keep focus buffer current")
+assert_truthy(#vim.fn.glob(drift_root .. "/*.md", false, true) > 0, "expected drift draft")
+
+local edit_buf = scratch_markdown({
+  "## Heading",
+  "- task",
+  "  - child",
+})
+edit.indent_lines(edit_buf, 0, 2)
+assert_same(vim.api.nvim_buf_get_lines(edit_buf, 0, -1, false), {
+  "## Heading",
+  "  - task",
+  "    - child",
+}, "indent only bullets")
+edit.outdent_lines(edit_buf, 0, 2)
+assert_same(vim.api.nvim_buf_get_lines(edit_buf, 0, -1, false), {
+  "## Heading",
+  "- task",
+  "  - child",
+}, "outdent only bullets")
+
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+fold.toggle_current_block(edit_buf)
+assert_truthy(vim.fn.foldclosed(2) ~= -1, "expected folded block")
+fold.toggle_current_block(edit_buf)
+assert_same(vim.fn.foldclosed(2), -1, "expected open block")
+
+drafts.cleanup(draft_root, os.time() + 25 * 60 * 60)
+
+print("markdown_focus_smoke: ok")
