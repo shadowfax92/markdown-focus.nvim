@@ -103,12 +103,32 @@ local function list_item_block(bufnr, node)
   }
 end
 
+local function paragraph_block(bufnr, node)
+  -- A bullet's own text is also a paragraph node (and bleeds into nested-list
+  -- continuation markers). Skip those so list_item focus still wins the whole
+  -- subtree instead of a truncated single-line range.
+  local parent = node:parent()
+  if parent and parent:type() == "list_item" then
+    return nil
+  end
+
+  local start_row = ({ node:range() })[1]
+  return {
+    kind = "paragraph",
+    start_row = start_row,
+    end_row = node_end_row(node),
+    text = line_at(bufnr, start_row),
+  }
+end
+
 local function find_candidate(bufnr, node, cursor_row, best)
   local block
   if node:type() == "section" then
     block = section_block(bufnr, node)
   elseif node:type() == "list_item" then
     block = list_item_block(bufnr, node)
+  elseif node:type() == "paragraph" then
+    block = paragraph_block(bufnr, node)
   end
 
   if block and contains(block, cursor_row) and better_candidate(block, best) then
@@ -122,7 +142,7 @@ local function find_candidate(bufnr, node, cursor_row, best)
   return best
 end
 
---- Returns the nearest Tree-sitter heading or list-item block for a zero-indexed row.
+--- Returns the nearest Tree-sitter heading, list-item, or paragraph block for a zero-indexed row.
 function M.current_block(bufnr, cursor_row)
   bufnr = bufnr or 0
   local root, reason, detail = parse_root(bufnr)

@@ -43,7 +43,7 @@ function M.focus_current_block(source_bufnr)
     return nil
   end
   if not block then
-    vim.notify("Markdown focus: cursor is not on a heading or bullet", vim.log.levels.WARN)
+    vim.notify("Markdown focus: cursor is not on a heading, bullet, or paragraph", vim.log.levels.WARN)
     return nil
   end
 

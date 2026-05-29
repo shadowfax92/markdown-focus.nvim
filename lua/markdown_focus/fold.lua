@@ -25,7 +25,7 @@ function M.toggle_current_block(bufnr)
     return
   end
   if not block then
-    vim.notify("Markdown focus: cursor is not on a heading or bullet", vim.log.levels.WARN)
+    vim.notify("Markdown focus: cursor is not on a heading, bullet, or paragraph", vim.log.levels.WARN)
     return
   end
   if block.end_row <= block.start_row then

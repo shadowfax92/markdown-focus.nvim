@@ -120,6 +120,47 @@ assert_truthy(vim.fn.foldclosed(2) ~= -1, "expected folded block")
 fold.toggle_current_block(edit_buf)
 assert_same(vim.fn.foldclosed(2), -1, "expected open block")
 
+local para_source = scratch_markdown({
+  "## Notes",
+  "lead line of para",
+  "  indented child",
+  "  another child",
+  "",
+  "- bullet",
+  "  - nested",
+})
+
+assert_same(parser.current_block(para_source, 1), {
+  kind = "paragraph",
+  start_row = 1,
+  end_row = 3,
+  text = "lead line of para",
+}, "paragraph block from lead line")
+
+assert_same(parser.current_block(para_source, 2), {
+  kind = "paragraph",
+  start_row = 1,
+  end_row = 3,
+  text = "lead line of para",
+}, "paragraph block from continuation line")
+
+assert_same(parser.current_block(para_source, 5), {
+  kind = "list_item",
+  start_row = 5,
+  end_row = 6,
+  indent = 0,
+  text = "- bullet",
+}, "bullet still focuses its subtree, not its inner paragraph")
+
+vim.api.nvim_win_set_cursor(0, { 3, 0 })
+local para_focus = focus.focus_current_block(para_source)
+assert_truthy(para_focus, "expected paragraph focus buffer")
+assert_same(vim.api.nvim_buf_get_lines(para_focus, 0, -1, false), {
+  "lead line of para",
+  "  indented child",
+  "  another child",
+}, "focused paragraph lines")
+
 drafts.cleanup(draft_root, os.time() + 25 * 60 * 60)
 
 print("markdown_focus_smoke: ok")
