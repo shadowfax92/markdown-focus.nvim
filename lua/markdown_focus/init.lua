@@ -83,6 +83,7 @@ function M.setup()
 end
 
 M.focus_current_block = focus.focus_current_block
+M.save = focus.save
 M.unfocus = focus.unfocus
 M.toggle_current_block = fold.toggle_current_block
 

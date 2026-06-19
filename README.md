@@ -13,6 +13,7 @@ Markdown notes get big fast. `markdown-focus.nvim` lets you put your cursor on a
 - 🔎 **Block focus** — isolate the current heading or list item subtree into a `markdown.outline` buffer
 - ✍️ **Editable scratch** — work in a normal Markdown buffer with your Markdown ftplugin settings
 - 🛡️ **Drift-safe writeback** — source ranges are hash-checked before replacement
+- 📥 **In-place save** — `:w` writes the block back to the source without leaving focus mode
 - 💾 **Recovery drafts** — focused content is written to timestamped drafts before writeback
 - 🧭 **Outline folding** — toggle the current subtree body with a manual fold
 - ↕️ **Bullet shaping** — indent and outdent bullet lines from insert or visual mode
@@ -59,6 +60,7 @@ Put the cursor on a Markdown heading or bullet:
 
 ```text
 zf          focus the current block
+:w          write the block back in place, stay focused
 zu          write back and return
 <Tab>       fold or unfold the current block body
 ```
@@ -84,6 +86,7 @@ After `:MarkdownFocusEnable`, these buffer-local mappings are installed:
 |---------|------|---------|
 | `<CR>` | Normal | Focus current block |
 | `zf` | Normal | Focus current block |
+| `:w` | Command | Write back in place, stay focused |
 | `<BS>` | Normal | Unfocus and write back |
 | `zu` | Normal | Unfocus and write back |
 | `<Tab>` | Normal | Toggle current block fold |
@@ -98,8 +101,8 @@ After `:MarkdownFocusEnable`, these buffer-local mappings are installed:
 Three moving pieces:
 
 1. **Parser** — Tree-sitter finds the nearest Markdown `section` or `list_item` around the cursor.
-2. **Focus buffer** — the selected source range is copied into an unlisted `nofile` buffer named like `markdown-focus://note.md:L12-L30`.
-3. **Writeback** — unfocus compares the current source range with its original hash before replacing it.
+2. **Focus buffer** — the selected source range is copied into an unlisted `acwrite` buffer named like `markdown-focus://note.md:L12-L30`, so `:w` routes through the plugin instead of erroring.
+3. **Writeback** — both `:w` (save in place) and unfocus compare the current source range against its original hash before replacing it. After a `:w` the stored range advances, so you can keep editing and saving.
 
 If the source buffer disappeared or changed, writeback is refused. The focus buffer stays open, and the attempted content is preserved under:
 
