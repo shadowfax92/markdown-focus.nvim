@@ -161,6 +161,54 @@ assert_same(vim.api.nvim_buf_get_lines(para_focus, 0, -1, false), {
   "  another child",
 }, "focused paragraph lines")
 
+-- :w saves the block back in place and keeps you in focus mode; repeated saves keep working.
+local save_source = scratch_markdown({
+  "## Plans",
+  "- one",
+  "- two",
+})
+vim.api.nvim_win_set_cursor(0, { 1, 0 })
+local save_focus = focus.focus_current_block(save_source)
+assert_truthy(save_focus, "expected save focus buffer")
+assert_same(vim.bo[save_focus].buftype, "acwrite", "focus buffer must be acwrite so :w works")
+assert_truthy(not vim.bo[save_focus].modified, "fresh focus buffer should be unmodified")
+
+vim.api.nvim_buf_set_lines(save_focus, 1, 2, false, { "- ONE" })
+local save_root = vim.fn.tempname()
+local save_result = focus.save(0, { draft_root = save_root })
+assert_truthy(save_result.ok, "expected save writeback")
+assert_truthy(vim.api.nvim_buf_is_valid(save_focus), "save should keep the focus buffer open")
+assert_same(vim.api.nvim_get_current_buf(), save_focus, "save should stay in the focus buffer")
+assert_truthy(not vim.bo[save_focus].modified, "save should clear 'modified'")
+assert_same(vim.api.nvim_buf_get_lines(save_source, 0, -1, false), {
+  "## Plans",
+  "- ONE",
+  "- two",
+}, "source after first save")
+assert_truthy(#vim.fn.glob(save_root .. "/*.md", false, true) > 0, "expected save draft")
+
+-- A second save after more edits must still apply: range + hash advanced on the first save.
+vim.api.nvim_buf_set_lines(save_focus, 2, 3, false, { "- two", "- three" })
+local save_result2 = focus.save(0, { draft_root = save_root })
+assert_truthy(save_result2.ok, "expected second save writeback")
+assert_same(vim.api.nvim_buf_get_lines(save_source, 0, -1, false), {
+  "## Plans",
+  "- ONE",
+  "- two",
+  "- three",
+}, "source after second save grows the range")
+
+-- :w through BufWriteCmd exercises the same path end-to-end.
+vim.api.nvim_buf_set_lines(save_focus, 1, 2, false, { "- uno" })
+vim.cmd("silent write")
+assert_truthy(not vim.bo[save_focus].modified, ":w via BufWriteCmd should clear 'modified'")
+assert_same(vim.api.nvim_buf_get_lines(save_source, 0, -1, false), {
+  "## Plans",
+  "- uno",
+  "- two",
+  "- three",
+}, "source after :w")
+
 drafts.cleanup(draft_root, os.time() + 25 * 60 * 60)
 
 print("markdown_focus_smoke: ok")

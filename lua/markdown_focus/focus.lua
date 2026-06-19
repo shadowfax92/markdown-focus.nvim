@@ -34,64 +34,34 @@ local function set_focus_keymaps(bufnr)
   end, vim.tbl_extend("force", opts, { desc = "Markdown focus: unfocus" }))
 end
 
---- Opens the current heading or list subtree in an editable focus buffer.
-function M.focus_current_block(source_bufnr)
-  source_bufnr = resolve_current_buf(source_bufnr)
-  local block, reason, detail = parser.current_cursor_block(source_bufnr)
-  if reason then
-    notify_parse_error(reason, detail)
-    return nil
-  end
-  if not block then
-    vim.notify("Markdown focus: cursor is not on a heading, bullet, or paragraph", vim.log.levels.WARN)
-    return nil
-  end
-
-  local cursor = vim.api.nvim_win_get_cursor(0)
-  local selected = vim.api.nvim_buf_get_lines(source_bufnr, block.start_row, block.end_row + 1, false)
-  local focus_buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[focus_buf].buftype = "nofile"
-  vim.bo[focus_buf].bufhidden = "hide"
-  vim.bo[focus_buf].swapfile = false
-  vim.bo[focus_buf].filetype = "markdown.outline"
-  vim.api.nvim_buf_set_name(
-    focus_buf,
-    string.format(
-      "markdown-focus://%s:L%d-L%d",
-      vim.fn.fnamemodify(source_path(source_bufnr), ":t"),
-      block.start_row + 1,
-      block.end_row + 1
-    )
-  )
-  vim.api.nvim_buf_set_lines(focus_buf, 0, -1, false, selected)
-  vim.b[focus_buf].markdown_focus = {
-    source_bufnr = source_bufnr,
-    source_path = source_path(source_bufnr),
-    source_start_row = block.start_row,
-    source_end_row = block.end_row,
-    original_hash = writeback.hash_lines(selected),
-    source_cursor = cursor,
-  }
-  vim.api.nvim_set_current_buf(focus_buf)
-  set_focus_keymaps(focus_buf)
-  return focus_buf
+-- Routes :w through the same drift-checked writeback as unfocus. The focus buffer is
+-- 'acwrite', so without this a habitual :w errors with E382 instead of saving.
+local function set_focus_autocmds(bufnr)
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    buffer = bufnr,
+    desc = "Markdown focus: write focused edits back to the source",
+    callback = function()
+      M.save(bufnr)
+    end,
+  })
 end
 
---- Writes focused edits back to the source buffer or preserves them in a draft.
-function M.unfocus(focus_bufnr, opts)
-  focus_bufnr = resolve_current_buf(focus_bufnr)
-  opts = opts or {}
-
+local function get_focus_meta(focus_bufnr)
   if not vim.api.nvim_buf_is_valid(focus_bufnr) then
-    return { ok = false, reason = "focus_missing" }
+    return nil, { ok = false, reason = "focus_missing" }
   end
-
   local meta = vim.b[focus_bufnr].markdown_focus
   if not meta then
     vim.notify("Markdown focus: current buffer is not a focus buffer", vim.log.levels.WARN)
-    return { ok = false, reason = "not_focus_buffer" }
+    return nil, { ok = false, reason = "not_focus_buffer" }
   end
+  return meta
+end
 
+-- Writes a recovery draft, then a hash-checked writeback to the source range. On
+-- success the stored range and hash are advanced to the just-written content so the
+-- buffer survives repeated saves without the drift guard rejecting the next one.
+local function persist(focus_bufnr, meta, opts)
   local focused_lines = vim.api.nvim_buf_get_lines(focus_bufnr, 0, -1, false)
   drafts.write({
     root = opts.draft_root,
@@ -111,6 +81,90 @@ function M.unfocus(focus_bufnr, opts)
     draft_root = opts.draft_root,
   })
 
+  if result.ok then
+    meta.source_end_row = meta.source_start_row + #focused_lines - 1
+    meta.original_hash = writeback.hash_lines(focused_lines)
+    vim.b[focus_bufnr].markdown_focus = meta
+  end
+
+  return result
+end
+
+--- Opens the current heading or list subtree in an editable focus buffer.
+function M.focus_current_block(source_bufnr)
+  source_bufnr = resolve_current_buf(source_bufnr)
+  local block, reason, detail = parser.current_cursor_block(source_bufnr)
+  if reason then
+    notify_parse_error(reason, detail)
+    return nil
+  end
+  if not block then
+    vim.notify("Markdown focus: cursor is not on a heading, bullet, or paragraph", vim.log.levels.WARN)
+    return nil
+  end
+
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local selected = vim.api.nvim_buf_get_lines(source_bufnr, block.start_row, block.end_row + 1, false)
+  local focus_buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[focus_buf].buftype = "acwrite"
+  vim.bo[focus_buf].bufhidden = "hide"
+  vim.bo[focus_buf].swapfile = false
+  vim.bo[focus_buf].filetype = "markdown.outline"
+  vim.api.nvim_buf_set_name(
+    focus_buf,
+    string.format(
+      "markdown-focus://%s:L%d-L%d",
+      vim.fn.fnamemodify(source_path(source_bufnr), ":t"),
+      block.start_row + 1,
+      block.end_row + 1
+    )
+  )
+  vim.api.nvim_buf_set_lines(focus_buf, 0, -1, false, selected)
+  vim.bo[focus_buf].modified = false
+  vim.b[focus_buf].markdown_focus = {
+    source_bufnr = source_bufnr,
+    source_path = source_path(source_bufnr),
+    source_start_row = block.start_row,
+    source_end_row = block.end_row,
+    original_hash = writeback.hash_lines(selected),
+    source_cursor = cursor,
+  }
+  vim.api.nvim_set_current_buf(focus_buf)
+  set_focus_keymaps(focus_buf)
+  set_focus_autocmds(focus_buf)
+  return focus_buf
+end
+
+--- Saves focused edits back to the source buffer without leaving focus mode.
+--- Bound to :w via BufWriteCmd so the habitual save keypress just works.
+function M.save(focus_bufnr, opts)
+  focus_bufnr = resolve_current_buf(focus_bufnr)
+  opts = opts or {}
+
+  local meta, err = get_focus_meta(focus_bufnr)
+  if not meta then
+    return err
+  end
+
+  local result = persist(focus_bufnr, meta, opts)
+  if result.ok then
+    vim.bo[focus_bufnr].modified = false
+    vim.notify("Markdown focus: saved to " .. vim.fn.fnamemodify(meta.source_path, ":t"), vim.log.levels.INFO)
+  end
+  return result
+end
+
+--- Writes focused edits back to the source buffer, then returns to it.
+function M.unfocus(focus_bufnr, opts)
+  focus_bufnr = resolve_current_buf(focus_bufnr)
+  opts = opts or {}
+
+  local meta, err = get_focus_meta(focus_bufnr)
+  if not meta then
+    return err
+  end
+
+  local result = persist(focus_bufnr, meta, opts)
   if result.ok then
     vim.api.nvim_set_current_buf(meta.source_bufnr)
     pcall(vim.api.nvim_win_set_cursor, 0, meta.source_cursor)
